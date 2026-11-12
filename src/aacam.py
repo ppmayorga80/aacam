@@ -11,7 +11,7 @@ Options:
     -s,--source=<source>      Video source [default: 0] integer for webcam id, or path to video file
     -k,--scale=<scale>        Scale factor for the ASCII art [default: 1.0]
     -i,--invert               Invert the ASCII characters
-    -o,--output=<output>      Output file path for saving the ASCII art or a number to redirect video output [default: 1]
+    -o,--output=<output>      Output file path for saving the ASCII art or a number to redirect video output [default: -1]
 
     
 """
@@ -21,14 +21,14 @@ import cv2
 import numpy as np
 import curses
 import time
+import pyvirtualcam
+
 from docopt import docopt
 from functools import partial
 
-from aa import image2aa, aa2lines
+from aa import image2aa, aa2lines, aa2image, load_mono_font
 
-
-
-def main(stdscr, path:int|str, scale:float=1.0, invert:bool=False, output:int|str=1):    
+def main_curses(stdscr, path:int|str, scale:float=1.0, invert:bool=False):
     curses.curs_set(0)
     stdscr.nodelay(True)
     h, w = stdscr.getmaxyx()
@@ -68,13 +68,54 @@ def main(stdscr, path:int|str, scale:float=1.0, invert:bool=False, output:int|st
                 time.sleep(sleep_time)
 
     cap.release()
-    
+
+def main_cam(path:int|str, scale:float=1.0, invert:bool=False):
+    cap = cv2.VideoCapture(path)
+    fps = max(int(cap.get(cv2.CAP_PROP_FPS)),20)
+    frame_time = 1.0 / fps if fps > 0 else 1.0 / 30.0
+    apply_sleep = True if isinstance(path, int) else False  # Only apply sleep for webcam input
+
+    width,height=1280,720
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    try:
+        with pyvirtualcam.Camera(width=width, height=height, fps=fps) as cam:
+            while True:
+                start = time.perf_counter() if not apply_sleep else 0  
+
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                # frame = cv2.resize(frame,dsize=(width,height),interpolation=cv2.INTER_NEAREST)
+                aa_frame = image2aa(frame, scale=scale, invert=invert, blur_size=3)
+                aa_image = aa2image(aa_frame)
+                aa_image = cv2.resize(aa_image,dsize=(width,height),interpolation=cv2.INTER_LINEAR)
+
+
+                cam.send(aa_image)
+                cam.sleep_until_next_frame()
+
+                if apply_sleep:
+                    elapsed = time.perf_counter() - start
+                    sleep_time = frame_time - elapsed
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+    except KeyboardInterrupt:
+        print("Stoping aacam.py...")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        cap.release()
+        print("Done.")
+
+
 if __name__ == "__main__":
     args = docopt(__doc__)
     input_path = args['--source']
     invert_flag = args['--invert']
     output_path = args['--output']
-    scale = float(args['--scale']) if args['--scale'] else 1.0
+    scale_factor = float(args['--scale']) if args['--scale'] else 1.0
 
     try:
         input_path = int(input_path)
@@ -85,6 +126,7 @@ if __name__ == "__main__":
     except ValueError:
         pass  # Keep output_path as a string if it cannot be converted to int
 
-    print(f"Input source: {input_path}:{type(input_path)}, Scale: {scale}:{type(scale)}, Invert: {invert_flag}:{type(invert_flag)}, Output: {output_path}:{type(output_path)}")
-
-    curses.wrapper(partial(main, path=input_path, scale=scale, invert=invert_flag, output=output_path))
+    if isinstance(output_path,int) and output_path==-1:
+        curses.wrapper(partial(main_curses, path=input_path, scale=scale_factor, invert=invert_flag))
+    else:
+        main_cam(path=output_path,scale=scale_factor,invert=invert_flag)
