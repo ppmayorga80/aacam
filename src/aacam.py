@@ -44,7 +44,7 @@ def main_curses(stdscr, path: int | str, scale: float = 1.0, invert: bool = Fals
     frame_time = 1.0 / fps if fps > 0 else 1.0 / 30.0
     apply_sleep = True if isinstance(path, int) else False  # Only apply sleep for webcam input
 
-    (dx, dy), (r0, c0), (rn, cn) = (0, 0), (0, 0), (min(aa_rows, cli_rows), min(aa_cols, cli_cols))
+    dx, dy = 0, 0
     while True:
         start = time.perf_counter() if not apply_sleep else 0  # Start timing only if we are applying sleep
 
@@ -52,14 +52,34 @@ def main_curses(stdscr, path: int | str, scale: float = 1.0, invert: bool = Fals
         if key == curses.KEY_LEFT:
             dx = max(dx - 1, -aa_cols)
             stdscr.clear()
+        if key in (ord('A'), ord('a')):
+                dx = max(dx - 10, -aa_cols)
+                stdscr.clear()
         elif key == curses.KEY_RIGHT:
             dx = min(dx + 1, cli_cols)
+            stdscr.clear()
+        elif key in (ord('D'), ord('d')):
+            dx = min(dx + 10, cli_cols)
             stdscr.clear()
         elif key == curses.KEY_UP:
             dy = max(dy - 1, -aa_rows)
             stdscr.clear()
+        elif key in (ord('W'), ord('w')):
+            dy = max(dy - 10, -aa_rows)
+            stdscr.clear()
         elif key == curses.KEY_DOWN:
             dy = min(dy + 1, cli_rows)
+            stdscr.clear()
+        elif key in (ord('S'), ord('s')):
+            dy = min(dy + 10, cli_rows)
+            stdscr.clear()
+        elif key == ord('+'):
+            scale = min(scale + 0.1, 5.0)
+            aa_rows, aa_cols = image_shape_to_aa_shape(shape=(image_rows, image_cols), scale=scale)
+            stdscr.clear()
+        elif key == ord('-'):
+            scale = max(scale - 0.1, 0.1)
+            aa_rows, aa_cols = image_shape_to_aa_shape(shape=(image_rows, image_cols), scale=scale)
             stdscr.clear()
         elif key in (27, ord('q'), ord('Q')):  # ESC or q,Q
             break
