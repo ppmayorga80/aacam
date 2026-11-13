@@ -5,13 +5,13 @@ It uses OpenCV for video capture, Pillow for image processing, and
 pyvirtualcam to create a virtual camera output.
 
 Usage:
-    aacam.py [--input=<input>] [--scale=<scale>] [--reverse] [--output=<output>] [--font-shape=<shape>] [--chars=<chars>]
+    aacam.py [--input=<input>] [--scale=<scale>] [--reverse] [--output=<output>] [--font-shape=<shape>] [--chars=<chars>] [--write=<file>]
 
 Options:
     -i,--input=<input>        Video input source [default: 0] integer for webcam id, or path to video file
     -s,--scale=<scale>        Scale factor for the ASCII art [default: 1.0]
     -r,--reverse              Compute the reverse intensity of the ASCII characters
-    -o,--output=<output>      Output of the ascii art: terminal or vcam [default: terminal]
+    -o,--output=<output>      Output of the ascii art: terminal or vcam [default: terminal], 0 is equivalent to vcam
     -f,--font-shape=<shape>   Font shape (height,width) for ASCII scaling & vcam rendering [default: 16,8]
     -c,--chars=<chars>        Char density string for the ASCII art [default: " _.,-=+:;cba!?0123456789$W#@N"]
                               values can be your own text except for the following keys:
@@ -24,6 +24,17 @@ Options:
                               "num": " .:-=+1234567890#@",
                               "ext": " .,-~:;=!+*?%S#&@$",
                               "full": " .,-~:;=!i><+rLv?1)(|/tjfnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$",
+    -w,--write=<file>         writes content to <file> when press key 'w' or 'W' [default: .out]
+
+
+Zoom and moves:
+    +     zoom in
+    -     zoom out
+    LEFT  move left
+    RIGHT move right
+    UP    move up
+    DOWN  move down
+    IJKL  mapping to UP,LEFT,DOWN,RIGHT  
 
 """
 import cv2
@@ -38,22 +49,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from aa import (
-    image2aa,
-    aa2lines,
-    aa2image,
-    load_mono_font,
-    image_shape_to_aa_shape,
-    EnvVars,
-    is_image_file,
-)
+from aa import image2aa,aa2lines,aa2image,load_mono_font,image_shape_to_aa_shape,EnvVars,is_image_file
 from audio_player import AudioPlayer
 
 
 def init_curses(stdscr) -> None:
     """Configure non-blocking curses mode with hidden cursor and minimal ESC delay."""
     curses.curs_set(0)
-    curses.set_escdelay(25)
+    if hasattr(curses, "set_escdelay"):
+        curses.set_escdelay(25)
     stdscr.nodelay(True)
 
 
@@ -96,32 +100,33 @@ def handle_nav_key(
     view_rows: int,
     view_cols: int,
 ) -> tuple[int, int, float, bool, bool]:
-    """Handle pan, zoom/scale, reset, and quit keys. Returns (dx, dy, factor, changed, should_quit)."""
+    """Handle pan, zoom/scale, reset, and quit keys. Returns (dx, dy, factor, changed, should_quit, should_write)."""
     changed = False
     should_quit = False
+    should_write = False
 
     if key == curses.KEY_LEFT:
         dx = max(dx - 1, -aa_cols)
         changed = True
-    elif key in (ord('A'), ord('a')):
+    elif key in (ord('J'), ord('j')):
         dx = max(dx - 10, -aa_cols)
         changed = True
     elif key == curses.KEY_RIGHT:
         dx = min(dx + 1, view_cols)
         changed = True
-    elif key in (ord('D'), ord('d')):
+    elif key in (ord('L'), ord('l')):
         dx = min(dx + 10, view_cols)
         changed = True
     elif key == curses.KEY_UP:
         dy = max(dy - 1, -aa_rows)
         changed = True
-    elif key in (ord('W'), ord('w')):
+    elif key in (ord('I'), ord('i')):
         dy = max(dy - 10, -aa_rows)
         changed = True
     elif key == curses.KEY_DOWN:
         dy = min(dy + 1, view_rows)
         changed = True
-    elif key in (ord('S'), ord('s')):
+    elif key in (ord('K'), ord('k')):
         dy = min(dy + 10, view_rows)
         changed = True
     elif key in (ord('+'), ord('=')):
@@ -133,10 +138,12 @@ def handle_nav_key(
     elif key == ord('0'):
         dx, dy, factor = 0, 0, initial_factor
         changed = True
+    elif key in (ord('W'), ord('w')):
+        should_write = True
     elif key in (27, ord('q'), ord('Q')):  # ESC or q, Q
         should_quit = True
 
-    return dx, dy, factor, changed, should_quit
+    return dx, dy, factor, changed, should_quit, should_write
 
 
 def compute_viewport_slices(
@@ -156,7 +163,7 @@ def compute_viewport_slices(
     return r0, rn, c0, cn, x0, y0
 
 
-def main_curses(stdscr, path: int | str, scale: float = 1.0, reverse: bool = False):
+def main_curses(stdscr, path: int | str, scale: float = 1.0, reverse: bool = False, write_path:str=".out"):
     init_curses(stdscr)
     is_image, is_video, cap, static_frame, image_rows, image_cols, fps = open_media_source(path)
 
@@ -170,6 +177,7 @@ def main_curses(stdscr, path: int | str, scale: float = 1.0, reverse: bool = Fal
         aa_rows, aa_cols = image_shape_to_aa_shape(shape=(image_rows, image_cols), scale=scale)
         frame_idx = 0
         dx, dy = 0, 0
+        should_write = False
 
         while True:
             if audio_player is not None:
@@ -180,7 +188,7 @@ def main_curses(stdscr, path: int | str, scale: float = 1.0, reverse: bool = Fal
                 cli_rows, cli_cols = stdscr.getmaxyx()
                 stdscr.erase()
             elif key != -1:
-                dx, dy, new_scale, changed, should_quit = handle_nav_key(
+                dx, dy, new_scale, changed, should_quit, should_write = handle_nav_key(
                     key, dx, dy, scale, initial_scale, 0.1, 5.0, aa_rows, aa_cols, cli_rows, cli_cols
                 )
                 if should_quit:
@@ -234,6 +242,10 @@ def main_curses(stdscr, path: int | str, scale: float = 1.0, reverse: bool = Fal
 
             if c0 < cn and r0 < rn:
                 visible_lines = aa2lines(aa_frame[r0:rn, c0:cn])
+                if should_write:
+                    with open(write_path,"wb") as fp:
+                        fp.write(b"\n".join(visible_lines))
+
                 for y, line in enumerate(visible_lines, start=y0):
                     if y == cli_rows - 1 and x0 + len(line) == cli_cols:
                         line = line[:-1]
