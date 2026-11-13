@@ -6,3 +6,6 @@ docopt>=0.6.2
 dotenv>=0.9.9
 
 pytest>=9.2.0
+numpy
+python-dotenv
+ffpyplayer

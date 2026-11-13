@@ -5,146 +5,210 @@ It uses OpenCV for video capture, Pillow for image processing, and
 pyvirtualcam to create a virtual camera output.
 
 Usage:
-    aacam.py [--source=<source>] [--scale=<scale>] [--invert] [--output=<output>]
+    aacam.py [--input=<input>] [--scale=<scale>] [--reverse] [--output=<output>] [--font-shape=<shape>] [--font=<font>] [--chars=<chars>]
 
 Options:
-    -s,--source=<source>      Video source [default: 0] integer for webcam id, or path to video file
-    -k,--scale=<scale>        Scale factor for the ASCII art [default: 1.0]
-    -i,--invert               Compute the inverse intensity of the ASCII characters
-    -o,--output=<output>      Output file path for saving the ASCII art or a number to redirect video output [default: -1]
+    -i,--input=<input>        Video input source [default: 0] integer for webcam id, or path to video file
+    -s,--scale=<scale>        Scale factor for the ASCII art [default: 1.0]
+    -r,--reverse              Compute the reverse intensity of the ASCII characters
+    -o,--output=<output>      Output of the ascii art: terminal or vcam [default: terminal]
+    --font-shape=<shape>      The font shape for saving the ASCII art [default: 16,8]
+    -f,--font=<font>          The font path [default: ]
+    -c,--chars=<chars>        Char density string for the ASCII art [default: " _.,-=+:;cba!?0123456789$W#@N"]
+                              values can be your own text except for the following keys:
+                              "min": " .:*#",
+                              "med": " .,:ilwW",
+                              "avg": " .:-=+*#%@",
+                              "max": " _.,-=+:;cba!?0123456789$W#@N",
+                              "sym": " .-:;=+*#%&$@",
+                              "alt": " .,-~:;+=xX$&#@",
+                              "num": " .:-=+1234567890#@",
+                              "ext": " .,-~:;=!+*?%S#&@$",
+                              "full": " .,-~:;=!i><+rLv?1)(|/tjfnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$",
 
-    
 """
-from importlib.resources import path
-
 import cv2
 import curses
 import time
 import pyvirtualcam
 
-from docopt import docopt
+from docopt import docopt, DocoptExit
 from functools import partial
+from dotenv import load_dotenv
 
-from aa import image2aa, aa2lines, aa2image, load_mono_font, image_shape_to_aa_shape
+load_dotenv()
+
+from aa import image2aa, aa2lines, aa2image, load_mono_font, image_shape_to_aa_shape, EnvVars, is_image_file
+from audio_player import AudioPlayer
 
 
-def main_curses(stdscr, path: int | str, scale: float = 1.0, invert: bool = False):
+def main_curses(stdscr, path: int | str, scale: float = 1.0, reverse: bool = False):
     curses.curs_set(0)
+    curses.set_escdelay(25)
     stdscr.nodelay(True)
 
-    cap = cv2.VideoCapture(path)
+    is_image = is_image_file(path)
+    if is_image:
+        static_frame = cv2.imread(path)
+        if static_frame is None:
+            raise ValueError(f"Could not open image: {path}")
+        image_rows, image_cols = static_frame.shape[:2]
+        fps = 30.0
+        cap = None
+    else:
+        static_frame = None
+        cap = cv2.VideoCapture(path)
+        image_rows, image_cols = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        fps = cap.get(cv2.CAP_PROP_FPS)
 
-    cli_rows, cli_cols = stdscr.getmaxyx()
-    image_rows, image_cols = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    aa_rows, aa_cols = image_shape_to_aa_shape(shape=(image_rows, image_cols), scale=scale)
-
-    debug_win = curses.newwin(1, cli_cols, cli_rows - 1, 0)
-
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_time = 1.0 / fps if fps > 0 else 1.0 / 30.0
-    apply_sleep = True if isinstance(path, int) else False  # Only apply sleep for webcam input
-
-    dx, dy = 0, 0
-    while True:
-        start = time.perf_counter() if not apply_sleep else 0  # Start timing only if we are applying sleep
-
-        key = stdscr.getch()
-        if key == curses.KEY_LEFT:
-            dx = max(dx - 1, -aa_cols)
-            stdscr.clear()
-        if key in (ord('A'), ord('a')):
-                dx = max(dx - 10, -aa_cols)
-                stdscr.clear()
-        elif key == curses.KEY_RIGHT:
-            dx = min(dx + 1, cli_cols)
-            stdscr.clear()
-        elif key in (ord('D'), ord('d')):
-            dx = min(dx + 10, cli_cols)
-            stdscr.clear()
-        elif key == curses.KEY_UP:
-            dy = max(dy - 1, -aa_rows)
-            stdscr.clear()
-        elif key in (ord('W'), ord('w')):
-            dy = max(dy - 10, -aa_rows)
-            stdscr.clear()
-        elif key == curses.KEY_DOWN:
-            dy = min(dy + 1, cli_rows)
-            stdscr.clear()
-        elif key in (ord('S'), ord('s')):
-            dy = min(dy + 10, cli_rows)
-            stdscr.clear()
-        elif key == ord('+'):
-            scale = min(scale + 0.1, 5.0)
-            aa_rows, aa_cols = image_shape_to_aa_shape(shape=(image_rows, image_cols), scale=scale)
-            stdscr.clear()
-        elif key == ord('-'):
-            scale = max(scale - 0.1, 0.1)
-            aa_rows, aa_cols = image_shape_to_aa_shape(shape=(image_rows, image_cols), scale=scale)
-            stdscr.clear()
-        elif key in (27, ord('q'), ord('Q')):  # ESC or q,Q
-            break
-        elif key in (ord('z'), ord('Z')):  # z,Z
-            stdscr.clear()
-        elif key == curses.KEY_RESIZE:
-            cli_rows, cli_cols = stdscr.getmaxyx()
-            stdscr.clear()
-
-        r0 = min(aa_rows, max(0, -dy))
-        rn = max(r0, min(aa_rows, cli_rows - dy))
-        c0 = min(aa_cols, max(0, -dx))
-        cn = max(c0, min(aa_cols, cli_cols - dx))
-        x0, y0 = max(0, dx), max(0, dy)
-
-        ret, frame = cap.read()
-        if not ret:
-            break
-        aa_frame = image2aa(frame, scale=scale, invert=invert)
-        aa_lines = aa2lines(aa_frame)
-
-        if c0 < cn:
-            for y, line in enumerate(aa_lines[r0:rn], start=y0):
-                # Stop 1 char short only if writing into the bottom-right corner (cli_rows - 1, cli_cols - 1)
-                cn_delta = 1 if (y == cli_rows - 1 and x0 + (cn - c0) == cli_cols) else 0
-                stdscr.addstr(y, x0, line[c0:cn - cn_delta])
-
-        # Debug region (highlighted with inverted colors, no color setup needed)
-        debug_win.erase()
-        debug_win.addstr(0, 0, f"dx:{dx:4} | dy:{dy:4}", curses.A_REVERSE)
-        debug_win.noutrefresh()
-
-        curses.doupdate()
-        # stdscr.refresh()
-
-        if apply_sleep:
-            elapsed = time.perf_counter() - start
-            sleep_time = frame_time - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-
-    cap.release()
-
-
-def main_cam(path: int | str, scale: float = 1.0, invert: bool = False):
-    cap = cv2.VideoCapture(path)
-    fps = max(int(cap.get(cv2.CAP_PROP_FPS)), 20)
-    frame_time = 1.0 / fps if fps > 0 else 1.0 / 30.0
-    apply_sleep = True if isinstance(path, int) else False  # Only apply sleep for webcam input
-
-    width, height = 1280, 720
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    is_video = isinstance(path, str) and not is_image
+    audio_player = AudioPlayer(path) if is_video else None
+    fallback_start = time.perf_counter()
+    audio_active = False
 
     try:
-        with pyvirtualcam.Camera(width=width, height=height, fps=fps) as cam:
-            while True:
-                start = time.perf_counter() if not apply_sleep else 0
+        cli_rows, cli_cols = stdscr.getmaxyx()
+        aa_rows, aa_cols = image_shape_to_aa_shape(shape=(image_rows, image_cols), scale=scale)
+        frame_idx = 0
+        dx, dy = 0, 0
+
+        while True:
+            if audio_player is not None:
+                audio_player.tick()
+
+            key = stdscr.getch()
+            if key == curses.KEY_LEFT:
+                dx = max(dx - 1, -aa_cols)
+                stdscr.erase()
+            elif key in (ord('A'), ord('a')):
+                dx = max(dx - 10, -aa_cols)
+                stdscr.erase()
+            elif key == curses.KEY_RIGHT:
+                dx = min(dx + 1, cli_cols)
+                stdscr.erase()
+            elif key in (ord('D'), ord('d')):
+                dx = min(dx + 10, cli_cols)
+                stdscr.erase()
+            elif key == curses.KEY_UP:
+                dy = max(dy - 1, -aa_rows)
+                stdscr.erase()
+            elif key in (ord('W'), ord('w')):
+                dy = max(dy - 10, -aa_rows)
+                stdscr.erase()
+            elif key == curses.KEY_DOWN:
+                dy = min(dy + 1, cli_rows)
+                stdscr.erase()
+            elif key in (ord('S'), ord('s')):
+                dy = min(dy + 10, cli_rows)
+                stdscr.erase()
+            elif key == ord('+'):
+                scale = min(scale + 0.1, 5.0)
+                aa_rows, aa_cols = image_shape_to_aa_shape(shape=(image_rows, image_cols), scale=scale)
+                stdscr.erase()
+            elif key == ord('-'):
+                scale = max(scale - 0.1, 0.1)
+                aa_rows, aa_cols = image_shape_to_aa_shape(shape=(image_rows, image_cols), scale=scale)
+                stdscr.erase()
+            elif key in (27, ord('q'), ord('Q')):  # ESC or q, Q
+                break
+            elif key == curses.KEY_RESIZE:
+                cli_rows, cli_cols = stdscr.getmaxyx()
+                stdscr.erase()
+
+            r0 = min(aa_rows, max(0, -dy))
+            rn = max(r0, min(aa_rows, cli_rows - dy))
+            c0 = min(aa_cols, max(0, -dx))
+            cn = max(c0, min(aa_cols, cli_cols - dx))
+            x0, y0 = max(0, dx), max(0, dy)
+
+            media_time = 0.0
+            if is_video and fps > 0:
+                pts = audio_player.get_time() if audio_player is not None else 0.0
+                if pts > 0.0:
+                    audio_active = True
+                    media_time = pts
+                elif not audio_active and audio_player is not None and audio_player.active and (
+                        time.perf_counter() - fallback_start) < 0.5:
+                    media_time = 0.0
+                else:
+                    if audio_active:
+                        fallback_start = time.perf_counter() - (frame_idx / fps)
+                        audio_active = False
+                    media_time = time.perf_counter() - fallback_start
+
+            if is_image:
+                frame = static_frame
+            else:
+                if is_video and fps > 0:
+                    expected_frame = int(media_time * fps)
+                    while frame_idx < expected_frame:
+                        if not cap.grab():
+                            break
+                        frame_idx += 1
 
                 ret, frame = cap.read()
                 if not ret:
                     break
-                # frame = cv2.resize(frame,dsize=(width,height),interpolation=cv2.INTER_NEAREST)
-                aa_frame = image2aa(frame, scale=scale, invert=invert, blur_size=3)
-                aa_image = aa2image(aa_frame)
+                frame_idx += 1
+
+            aa_frame = image2aa(frame, scale=scale, reverse=reverse)
+
+            if c0 < cn and r0 < rn:
+                visible_lines = aa2lines(aa_frame[r0:rn, c0:cn])
+                for y, line in enumerate(visible_lines, start=y0):
+                    if y == cli_rows - 1 and x0 + len(line) == cli_cols:
+                        line = line[:-1]
+                    stdscr.addstr(y, x0, line)
+
+            stdscr.refresh()
+
+            if is_image:
+                time.sleep(1.0 / 30.0)
+            elif is_video and fps > 0:
+                sleep_time = (frame_idx / fps) - media_time
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+
+    finally:
+        if audio_player is not None:
+            audio_player.close()
+        if isinstance(path, str) and cap is not None:
+            cap.release()
+
+
+def main_vcam(path: int | str, scale: float = 1.0, reverse: bool = False, font=None):
+    is_image = is_image_file(path)
+    if is_image:
+        static_frame = cv2.imread(path)
+        if static_frame is None:
+            raise ValueError(f"Could not open image: {path}")
+        height, width = static_frame.shape[:2]
+        fps = 30
+        cap = None
+    else:
+        static_frame = None
+        cap = cv2.VideoCapture(path)
+        fps = max(int(cap.get(cv2.CAP_PROP_FPS)), 20)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    frame_time = 1.0 / fps if fps > 0 else 1.0 / 30.0
+    apply_sleep = isinstance(path, str)
+
+    try:
+        with pyvirtualcam.Camera(width=width, height=height, fps=fps) as cam:
+            while True:
+                start = time.perf_counter() if apply_sleep else 0
+
+                if is_image:
+                    frame = static_frame
+                else:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                aa_frame = image2aa(frame, scale=scale, reverse=reverse, blur_size=3)
+                aa_image = aa2image(aa_frame, font=font)
                 aa_image = cv2.resize(aa_image, dsize=(width, height), interpolation=cv2.INTER_LINEAR)
 
                 cam.send(aa_image)
@@ -156,31 +220,35 @@ def main_cam(path: int | str, scale: float = 1.0, invert: bool = False):
                     if sleep_time > 0:
                         time.sleep(sleep_time)
     except KeyboardInterrupt:
-        print("Stoping aacam.py...")
+        print("Stopping aacam.py...")
     except Exception as e:
         print(f"Error: {e}")
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
         print("Done.")
 
 
 if __name__ == "__main__":
     args = docopt(__doc__)
-    input_path = args['--source']
-    invert_flag = args['--invert']
-    output_path = args['--output']
+    input_path = args['--input']
+    reverse_flag = args['--reverse']
+    output = str(args['--output']).lower()
     scale_factor = float(args['--scale']) if args['--scale'] else 1.0
+    font_shape = tuple(int(s) for s in str(args['--font-shape']).split(","))
+
+    font_path = args['--font']
+    font = load_mono_font(size=16, font_path=font_path)
+
+    EnvVars.set_chars(args['--chars'])
+    EnvVars.set_font_shape(font_shape[0], font_shape[1])
 
     try:
         input_path = int(input_path)
     except ValueError:
         pass  # Keep input_path as a string if it cannot be converted to int
-    try:
-        output_path = int(output_path)
-    except ValueError:
-        pass  # Keep output_path as a string if it cannot be converted to int
 
-    if isinstance(output_path, int) and output_path == -1:
-        curses.wrapper(partial(main_curses, path=input_path, scale=scale_factor, invert=invert_flag))
-    else:
-        main_cam(path=output_path, scale=scale_factor, invert=invert_flag)
+    if output.lower().startswith("t"):
+        curses.wrapper(partial(main_curses, path=input_path, scale=scale_factor, reverse=reverse_flag))
+    elif output.lower().startswith(("v", "0")):
+        main_vcam(path=input_path, scale=scale_factor, reverse=reverse_flag, font=font)
