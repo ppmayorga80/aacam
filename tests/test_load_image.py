@@ -11,7 +11,7 @@ def test_load_image():
     assert img.dtype == np.uint8, "Image array is not of type uint8"
     assert len(img.shape) == 3, "Image array is not a color image"
     
-    aa = image2aa(img, invert=False)
+    aa = image2aa(img, reverse=False)
     assert isinstance(aa, np.ndarray), "ASCII art is not a numpy array"
     assert aa.dtype.type is np.str_, "ASCII art array is not of type str"
     
