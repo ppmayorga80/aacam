@@ -4,6 +4,7 @@ This module provides functions to convert images to ASCII art and to convert ASC
 """
 import cv2
 import numpy as np
+import os
 from PIL import Image, ImageDraw, ImageFont
 
 FONT_WIDTH = 8
@@ -58,8 +59,11 @@ def aa2lines(aa_matrix:np.ndarray)->list[str]:
 def load_mono_font(size: int = 10, font_path:str="") -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Load a cross-platform 10pt monospaced font (cached once outside the loop)."""
     # Note: Pillow sizes are in pixels; for strict 10pt at 96 DPI, use size=13.
+    
+    meslo_path = os.path.join(os.path.dirname(__file__),"MesloLGS NF Regular.ttf")
     candidates = [
         font_path,
+        meslo_path,
         "consola.ttf",                  # Windows (Consolas)
         "cour.ttf",                     # Windows (Courier New)
         "DejaVuSansMono.ttf",           # Linux
@@ -69,6 +73,7 @@ def load_mono_font(size: int = 10, font_path:str="") -> ImageFont.FreeTypeFont |
     for font_path in candidates:
         try:
             f = ImageFont.truetype(font_path, size=size)
+            print(f"Font loadad: {font_path}")
             return f
         except OSError:
             continue
@@ -94,7 +99,7 @@ def aa2image(
         font: Preloaded Pillow monospaced font.
         as_bgr (bool): If True, returns an OpenCV BGR np.ndarray; otherwise a PIL.Image.
     """
-    rows, cols = aa_matrix.shape
+    rows, cols = aa_matrix.shape[:2]
 
     # Measure exact cell size so every frame keeps a fixed resolution
     char_w = max(1, int(round(font.getlength("M"))))
